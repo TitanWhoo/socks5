@@ -1,18 +1,18 @@
 package socks5_test
 
 import (
+	"context"
 	"encoding/hex"
+	"github.com/TitanWhoo/socks5"
+	"github.com/miekg/dns"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
-
-	"github.com/miekg/dns"
-	"github.com/txthinking/socks5"
 )
 
 func ExampleServer() {
-	s, err := socks5.NewClassicServer("127.0.0.1:1080", "127.0.0.1", "", "", 0, 60)
+	s, err := socks5.NewServer("127.0.0.1:1080", "127.0.0.1", "", "", []string{"198.18.0.1/32"}, 60, 60)
 	if err != nil {
 		log.Println(err)
 		return
@@ -31,12 +31,12 @@ func ExampleClient_tcp() {
 	}
 	client := &http.Client{
 		Transport: &http.Transport{
-			Dial: func(network, addr string) (net.Conn, error) {
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return c.Dial(network, addr)
 			},
 		},
 	}
-	res, err := client.Get("https://ifconfig.co")
+	res, err := client.Get("https://httpbin.org/ip")
 	if err != nil {
 		log.Println(err)
 		return

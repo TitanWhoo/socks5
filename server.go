@@ -4,13 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"strings"
 	"time"
 
-	cache "github.com/patrickmn/go-cache"
+	"github.com/patrickmn/go-cache"
 	"github.com/txthinking/runnergroup"
 )
 
@@ -39,6 +38,8 @@ type Server struct {
 	RunnerGroup       *runnergroup.RunnerGroup
 	// RFC: [UDP ASSOCIATE] The server MAY use this information to limit access to the association. Default false, no limit.
 	LimitUDP bool
+	// bind outgoing cidr
+	BindCidrs []string
 }
 
 // UDPExchange used to store client address and remote connection
@@ -47,8 +48,8 @@ type UDPExchange struct {
 	RemoteConn net.Conn
 }
 
-// NewClassicServer return a server which allow none method
-func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeout int) (*Server, error) {
+// NewServer return a server which allow none method and support bind outgoing cidr
+func NewServer(addr, ip, username, password string, bindCidrs []string, tcpTimeout, udpTimeout int) (*Server, error) {
 	_, p, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -77,8 +78,14 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 		AssociatedUDP:     cs1,
 		UDPSrc:            cs2,
 		RunnerGroup:       runnergroup.New(),
+		BindCidrs:         bindCidrs,
 	}
 	return s, nil
+}
+
+// NewClassicServer return a server which allow none method
+func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeout int) (*Server, error) {
+	return NewServer(addr, ip, username, password, nil, tcpTimeout, udpTimeout)
 }
 
 // Negotiate handle negotiate packet.
@@ -262,7 +269,16 @@ type DefaultHandle struct {
 // TCPHandle auto handle request. You may prefer to do yourself.
 func (h *DefaultHandle) TCPHandle(s *Server, c *net.TCPConn, r *Request) error {
 	if r.Cmd == CmdConnect {
-		rc, err := r.Connect(c)
+		rc, err := func(server *Server) (net.Conn, error) {
+			if len(server.BindCidrs) == 0 {
+				return r.Connect(c)
+			}
+			randomIP, err := GetRandomIPFromCidrs(server.BindCidrs)
+			if err != nil {
+				return nil, err
+			}
+			return r.ConnectWithLaddr(fmt.Sprintf("%s:0", randomIP), c)
+		}(s)
 		if err != nil {
 			return err
 		}
@@ -299,7 +315,6 @@ func (h *DefaultHandle) TCPHandle(s *Server, c *net.TCPConn, r *Request) error {
 				return nil
 			}
 		}
-		return nil
 	}
 	if r.Cmd == CmdUDP {
 		caddr, err := r.UDP(c, s.ServerAddr)
@@ -310,7 +325,7 @@ func (h *DefaultHandle) TCPHandle(s *Server, c *net.TCPConn, r *Request) error {
 		defer close(ch)
 		s.AssociatedUDP.Set(caddr.String(), ch, -1)
 		defer s.AssociatedUDP.Delete(caddr.String())
-		io.Copy(ioutil.Discard, c)
+		io.Copy(io.Discard, c)
 		if Debug {
 			log.Printf("A tcp connection that udp %#v associated closed\n", caddr.String())
 		}
@@ -358,24 +373,32 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 		log.Printf("Call udp: %#v\n", dst)
 	}
 	var laddr string
-	any, ok := s.UDPSrc.Get(src + dst)
+	srcAddr, ok := s.UDPSrc.Get(src + dst)
 	if ok {
-		laddr = any.(string)
+		laddr = srcAddr.(string)
+	} else if len(s.BindCidrs) != 0 {
+		randomIP, err := GetRandomIPFromCidrs(s.BindCidrs)
+		if err != nil {
+			return err
+		}
+		laddr = fmt.Sprintf("%s:", randomIP)
 	}
 	rc, err := DialUDP("udp", laddr, dst)
 	if err != nil {
 		if !strings.Contains(err.Error(), "address already in use") && !strings.Contains(err.Error(), "can't assign requested address") {
 			return err
 		}
-		rc, err = DialUDP("udp", "", dst)
+		if len(s.BindCidrs) == 0 {
+			return err
+		}
+		randomIP, _ := GetRandomIPFromCidrs(s.BindCidrs)
+		laddr = fmt.Sprintf("%s:", randomIP)
+		rc, err = DialUDP("udp", laddr, dst)
 		if err != nil {
 			return err
 		}
-		laddr = ""
 	}
-	if laddr == "" {
-		s.UDPSrc.Set(src+dst, rc.LocalAddr().String(), -1)
-	}
+	s.UDPSrc.Set(src+dst, laddr, -1)
 	ue = &UDPExchange{
 		ClientAddr: addr,
 		RemoteConn: rc,
