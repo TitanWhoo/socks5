@@ -39,7 +39,8 @@ type Server struct {
 	// RFC: [UDP ASSOCIATE] The server MAY use this information to limit access to the association. Default false, no limit.
 	LimitUDP bool
 	// bind outgoing cidr
-	BindCidrs []string
+	BindCidrs    []string
+	AssociatedIP *cache.Cache
 }
 
 // UDPExchange used to store client address and remote connection
@@ -62,9 +63,6 @@ func NewServer(addr, host, username, password string, bindCidrs []string, tcpTim
 	if username != "" && password != "" {
 		m = MethodUsernamePassword
 	}
-	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
-	cs1 := cache.New(cache.NoExpiration, cache.NoExpiration)
-	cs2 := cache.New(cache.NoExpiration, cache.NoExpiration)
 	s := &Server{
 		Method:            m,
 		UserName:          username,
@@ -72,13 +70,14 @@ func NewServer(addr, host, username, password string, bindCidrs []string, tcpTim
 		SupportedCommands: []byte{CmdConnect, CmdUDP},
 		Addr:              addr,
 		ServerAddr:        saddr,
-		UDPExchanges:      cs,
+		UDPExchanges:      cache.New(cache.NoExpiration, cache.NoExpiration),
 		TCPTimeout:        tcpTimeout,
 		UDPTimeout:        udpTimeout,
-		AssociatedUDP:     cs1,
-		UDPSrc:            cs2,
+		AssociatedUDP:     cache.New(cache.NoExpiration, cache.NoExpiration),
+		UDPSrc:            cache.New(cache.NoExpiration, cache.NoExpiration),
 		RunnerGroup:       runnergroup.New(),
 		BindCidrs:         bindCidrs,
+		AssociatedIP:      cache.New(time.Minute*3, time.Second*5),
 	}
 	return s, nil
 }
@@ -119,19 +118,38 @@ func (s *Server) Negotiate(rw io.ReadWriter) error {
 		if err != nil {
 			return err
 		}
-		if string(urq.Uname) != s.UserName || string(urq.Passwd) != s.Password {
+		if s.UserName != "" && string(urq.Uname) != s.UserName {
 			urp := NewUserPassNegotiationReply(UserPassStatusFailure)
 			if _, err := urp.WriteTo(rw); err != nil {
 				return err
 			}
 			return ErrUserPassAuth
 		}
+		if s.Password != "" && string(urq.Passwd) != s.Password {
+			urp := NewUserPassNegotiationReply(UserPassStatusFailure)
+			if _, err := urp.WriteTo(rw); err != nil {
+				return err
+			}
+			return ErrUserPassAuth
+		}
+		s.GenerateFloatIP(string(urq.Uname), string(urq.Passwd))
 		urp := NewUserPassNegotiationReply(UserPassStatusSuccess)
 		if _, err := urp.WriteTo(rw); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *Server) GenerateFloatIP(username string, password string) {
+	if len(s.BindCidrs) == 0 || username == "" || password == "" {
+		return
+	}
+	randomIP, err := GetRandomIPFromCidrs(s.BindCidrs)
+	if err != nil {
+		return
+	}
+	s.AssociatedIP.Set(username+password, randomIP, cache.DefaultExpiration)
 }
 
 // GetRequest get request packet from client, and check command according to SupportedCommands
