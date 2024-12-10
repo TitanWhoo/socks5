@@ -49,12 +49,12 @@ type UDPExchange struct {
 }
 
 // NewServer return a server which allow none method and support bind outgoing cidr
-func NewServer(addr, ip, username, password string, bindCidrs []string, tcpTimeout, udpTimeout int) (*Server, error) {
+func NewServer(addr, host, username, password string, bindCidrs []string, tcpTimeout, udpTimeout int) (*Server, error) {
 	_, p, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
-	saddr, err := Resolve("udp", net.JoinHostPort(ip, p))
+	saddr, err := Resolve("udp", net.JoinHostPort(host, p))
 	if err != nil {
 		return nil, err
 	}
@@ -84,8 +84,8 @@ func NewServer(addr, ip, username, password string, bindCidrs []string, tcpTimeo
 }
 
 // NewClassicServer return a server which allow none method
-func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeout int) (*Server, error) {
-	return NewServer(addr, ip, username, password, nil, tcpTimeout, udpTimeout)
+func NewClassicServer(addr, host, username, password string, tcpTimeout, udpTimeout int) (*Server, error) {
+	return NewServer(addr, host, username, password, nil, tcpTimeout, udpTimeout)
 }
 
 // Negotiate handle negotiate packet.
