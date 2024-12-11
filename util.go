@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math/big"
+	"math/rand"
 	"net"
 	"strconv"
+	"time"
 )
 
 // ParseAddress format address x.x.x.x:xx to raw address.
@@ -132,4 +136,57 @@ func (d *Datagram) Address() string {
 	}
 	p := strconv.Itoa(int(binary.BigEndian.Uint16(d.DstPort)))
 	return net.JoinHostPort(s, p)
+}
+
+func GetRandomIPFromCidrs(cidrs []string) (string, error) {
+	if len(cidrs) == 0 {
+		return "", fmt.Errorf("no CIDRs provided")
+	}
+
+	// 初始化随机数生成器
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// 随机选择一个CIDR
+	selectedCIDR := cidrs[r.Intn(len(cidrs))]
+
+	// 解析选定的CIDR
+	_, ipNet, err := net.ParseCIDR(selectedCIDR)
+	if err != nil {
+		return "", fmt.Errorf("invalid CIDR: %v", err)
+	}
+
+	// 获取CIDR的掩码和网络地址
+	mask := ipNet.Mask
+	networkIP := ipNet.IP
+
+	// 计算可用IP地址的数量
+	ones, bits := mask.Size()
+	maxHosts := new(big.Int).Lsh(big.NewInt(1), uint(bits-ones))
+	maxHosts.Sub(maxHosts, big.NewInt(1))
+
+	// 生成随机数
+	randomInt := new(big.Int)
+	randomInt.Rand(r, maxHosts)
+
+	// 计算随机IP
+	randomIP := make(net.IP, len(networkIP))
+	copy(randomIP, networkIP)
+
+	// 将随机数添加到网络地址以获得最终IP
+	for i := len(randomIP) - 1; i >= 0; i-- {
+		randomIP[i] |= byte(randomInt.Int64() & 0xFF)
+		randomInt.Rsh(randomInt, 8)
+	}
+
+	// 检查生成的IP是否在CIDR范围内
+	if !ipNet.Contains(randomIP) {
+		return "", fmt.Errorf("error, generated IP is not in CIDR range")
+	}
+
+	// 如果是IPv6地址，添加方括号
+	if randomIP.To4() == nil {
+		return fmt.Sprintf("[%s]", randomIP.String()), nil
+	}
+
+	return randomIP.String(), nil
 }

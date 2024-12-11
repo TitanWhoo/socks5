@@ -9,10 +9,16 @@ import (
 // Connect remote conn which u want to connect with your dialer
 // Error or OK both replied.
 func (r *Request) Connect(w io.Writer) (net.Conn, error) {
+	return r.ConnectWithLaddr("", w)
+}
+
+// ConnectWithLaddr remote conn which u want to connect with your dialer and specify local address.
+// Error or OK both replied.
+func (r *Request) ConnectWithLaddr(laddr string, w io.Writer) (net.Conn, error) {
 	if Debug {
-		log.Println("Call:", r.Address())
+		log.Printf("Call: %s, localAddr: %s", r.Address(), laddr)
 	}
-	rc, err := DialTCP("tcp", "", r.Address())
+	rc, err := DialTCP("tcp", laddr, r.Address())
 	if err != nil {
 		var p *Reply
 		if r.Atyp == ATYPIPv4 || r.Atyp == ATYPDomain {
